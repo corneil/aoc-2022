@@ -1,0 +1,154 @@
+== Beacon Exclusion Zone
+
+Today we had to inputs from sensors to determine areas covered by the sensors.
+
+The inputs are the coordinates of a sensor, and its closest beacon.
+
+=== Sample Input
+
+[source,text]
+....
+Sensor at x=2, y=18: closest beacon is at x=-2, y=15
+Sensor at x=9, y=16: closest beacon is at x=10, y=16
+Sensor at x=13, y=2: closest beacon is at x=15, y=3
+Sensor at x=12, y=14: closest beacon is at x=10, y=16
+Sensor at x=10, y=20: closest beacon is at x=10, y=16
+Sensor at x=14, y=17: closest beacon is at x=10, y=16
+Sensor at x=8, y=7: closest beacon is at x=2, y=10
+Sensor at x=2, y=0: closest beacon is at x=2, y=10
+Sensor at x=0, y=11: closest beacon is at x=2, y=10
+Sensor at x=20, y=14: closest beacon is at x=25, y=17
+Sensor at x=17, y=20: closest beacon is at x=21, y=22
+Sensor at x=16, y=7: closest beacon is at x=15, y=3
+Sensor at x=14, y=3: closest beacon is at x=15, y=3
+Sensor at x=20, y=1: closest beacon is at x=15, y=3
+....
+
+=== Model
+
+My model was Sensor with location of the sensor and the beacon and the Chebyshev/Manhattan distance between them.
+
+[source,kotlin]
+....
+data class Sensor(val pos: Coord, val beacon: Coord) {
+  val distance = pos.chebyshevDistance(beacon)
+  fun isInRange(loc: Coord) = this.pos.chebyshevDistance(loc) <= distance
+  fun deadSpots(row: Int): IntRange? {
+    val distanceToRow = abs(row - pos.y)
+    return if (distanceToRow <= distance) {
+      val diff = distance - distanceToRow
+      (pos.x - diff)..(pos.x + diff)
+    } else {
+      null
+    }
+  }
+}
+....
+
+=== Parsing
+
+I have a link:https://github.com/corneil/aoc-2022-in-kotlin/blob/main/src/main/kotlin/utils/parseUtils.kt[utility] function that will scan a line of text for integers and return a list.
+
+[source,kotlin]
+....
+fun loadSensors(input: List<String>): List<Sensor> {
+  return input.map { line ->
+    line.scanInts().let { (a,b,c,d) ->
+      Sensor(Coord(a,b), Coord(c,d))
+    }
+  }
+}
+....
+
+=== Part 1
+
+For part 1 we had to determine all the overlapping areas and then identify the number of position where the beacon couldn't be for a specific row.
+
+The simple approach didn't work with the actual data because the beacons and sensors are far apart and calculating the state for each position in the grid will take too long.
+I decided to calculation the areas covered by a sensor for a given row in the form of integer ranges, the positions of beacons are removed from the result and then the ranges are combined.
+
+They can be added up to determine the result of row very quickly.
+
+I developed some link:https://github.com/corneil/aoc-2022-in-kotlin/blob/main/src/main/kotlin/utils/rangeUtils.kt[utility] functions for working with `IntRange`.
+
+[source,kotlin]
+....
+fun calcDeadSpots(sensors: List<Sensor>, row: Int): Int {
+  val beacons = sensors.map { it.beacon }
+    .filter { it.y == row }
+    .map { it.x }
+    .toSet()
+
+  val deadSpots = sensors.filter {
+    it.pos.y <= row + it.distance && it.pos.y >= row - it.distance
+  }.mapNotNull { it.deadSpots(row) }
+    .flatMap { r ->
+      beacons.flatMap { beacon ->
+        r.exclude(beacon)
+      }
+    }
+  return joinRanges(deadSpots).sumOf { it.last - it.first + 1 }
+}
+
+fun calcSolution1(input: List<String>, row: Int): Int {
+  return calcDeadSpots(loadSensors(input), row)
+}
+....
+
+For the 2nd part we have to find the location of the hidden distress beacon by finding a large enough gap in the ranges.
+The distress beacon would be below 4000000 for x and y and above 0.
+I used the values of sensors, beacons and the Chebyshev distance between them to determine the lowest and highest rows.
+
+The frequency was the x * 4000000 + y
+
+When I located the distress signal and reported the frequency AoC reported too low. I then changed the math to use `addExact` and `multiplyExact` and it reported integer overflow errors. This meant I had to cast to `Long` before calculating the frequency and report it as such.
+
+=== Part 2
+
+
+[source,kotlin]
+....
+fun calcBeaconFrequency(sensors: List<Sensor>, size: Int): Long {
+  val range = 0..size
+  val beacons = sensors.map { it.beacon }.toSet()
+  val minRow = sensors.minOfOrNull { min(it.pos.y, it.beacon.y) - it.distance } ?: 0
+  val maxRow = sensors.maxOfOrNull { max(it.pos.y, it.beacon.y) + it.distance } ?: size
+  val rows = max(minRow, 0)..min(maxRow, size)
+  for (row in rows) {
+    val deadSpots = sensors
+      .mapNotNull { it.deadSpots(row) }
+      .filter { it.first in range || it.last in range }
+      .sortedBy { it.first }
+    val combined = joinRanges(deadSpots)
+      .map { max(it.first, 0)..min(it.last, size) }
+    for (index in 1..combined.lastIndex) {
+      val a = combined[index - 1]
+      val b = combined[index]
+      val searchRange = (a.last + 1) until b.first
+      for (x in searchRange) {
+        if (x in range) {
+          val loc = Coord(x, row)
+          val found = !beacons.contains(loc) && sensors.filter {
+            it.pos.y <= row + it.distance && it.pos.y >= row - it.distance
+          }.none { it.isInRange(loc) }
+          if (found) {
+            return loc.x.toLong() * size.toLong() + loc.y.toLong()
+          }
+        }
+      }
+    }
+  }
+  return error("Hidden Beacon not found")
+}
+
+fun calcSolution2(input: List<String>, size: Int): Long {
+  return calcBeaconFrequency(loadSensors(input), size)
+}
+....
+
+=== Full source
+
+[source,kotlin]
+....
+include::src/solution.kt[]
+....
